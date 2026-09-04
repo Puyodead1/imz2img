@@ -294,7 +294,14 @@ def _decode_block_stream(fin, fout, total_bytes, verify_crc, log):
                 data = lzw_decompress_block(payload, method, out_limit=None)
 
         if crc is not None and verify_crc:
-            actual = zlib.crc32(data) & 0xFFFFFFFF
+            # dfsee never actually hashes "unused SMART area" (EEEE/EEFC) blocks -
+            # it compares the stored crc against this fixed sentinel instead (see
+            # dfsWriteImageFile_: the default is -558892338 == 0xDEAFFACE, only
+            # replaced by a real crc32 when there is an actual data buffer).
+            if type_field in (0xEEEE, 0xEEFC):
+                actual = 0xDEAFFACE
+            else:
+                actual = zlib.crc32(data) & 0xFFFFFFFF
             if actual != crc:
                 log(f"block {block_no}: CRC32 mismatch (stored 0x{crc:08x}, "
                     f"computed 0x{actual:08x})")

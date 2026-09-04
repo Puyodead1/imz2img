@@ -508,7 +508,14 @@ static int decode_block_stream(imz_stream_t *s, FILE *fout, uint64_t total_bytes
         }
 
         if (have_crc && verify_crc) {
-            uint32_t actual = crc32_buf(data, data_len);
+            /* dfsee never actually hashes "unused SMART area" (EEEE/EEFC)
+             * blocks - it compares the stored crc against this fixed
+             * sentinel instead (see dfsWriteImageFile_: v82 defaults to
+             * -558892338 == 0xDEAFFACE and is only replaced by a real
+             * TxCrc32_() when there is an actual data buffer). */
+            uint32_t actual = (type_field == 0xEEEE || type_field == 0xEEFC)
+                ? 0xDEAFFACEu
+                : crc32_buf(data, data_len);
             if (actual != crc && !quiet) {
                 fprintf(stderr, "block %ld: CRC32 mismatch (stored 0x%08x, computed 0x%08x)\n",
                         block_no, crc, actual);

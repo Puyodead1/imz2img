@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -72,6 +73,20 @@ static bool has_crc(uint16_t type) {
 
 static bool is_rle(uint16_t type) {
     return (type & 0xFF00) == 0xFC00 || (type & 0xFF00) == 0xFF00;
+}
+
+static std::string human_size(uint64_t bytes) {
+    static constexpr const char* units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    double value = static_cast<double>(bytes);
+    size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < std::size(units)) {
+        value /= 1024.0;
+        ++unit;
+    }
+    std::ostringstream text;
+    if (unit == 0) text << bytes;
+    else text << std::fixed << std::setprecision(value < 10.0 ? 2 : 1) << value;
+    return text.str() + ' ' + units[unit];
 }
 
 class BitReader {
@@ -237,8 +252,7 @@ static std::vector<fs::path> multipart_paths(const fs::path& first) {
         std::vector<fs::path> result;
         unsigned expected = start;
         for (const auto& [number, path] : found) {
-            if (number != expected)
-                throw ImzError("missing multipart file number " + std::to_string(expected));
+            if (number != expected) break;
             result.push_back(path);
             ++expected;
         }
@@ -271,9 +285,13 @@ static void convert(const std::vector<fs::path>& parts, const fs::path& output_p
         if (!input) throw ImzError("cannot open input " + path.string());
         const auto header = read_header(input, path);
         if (header) {
-            if (!expected_total)
-                expected_total = static_cast<uint64_t>(header->total_sectors) *
-                                 header->sector_size;
+            if (!expected_total) {
+                const uint32_t logical_sectors =
+                    header->total_sectors ? header->total_sectors : header->sectors;
+                if (logical_sectors)
+                    expected_total = static_cast<uint64_t>(logical_sectors) *
+                                     header->sector_size;
+            }
         }
 
         char signature[6];
@@ -285,7 +303,9 @@ static void convert(const std::vector<fs::path>& parts, const fs::path& output_p
         if (!block_size) block_size = current_block_size;
         else if (block_size != current_block_size)
             throw ImzError("block size changed between parts");
-        if (verbose) std::cerr << path << ": block size " << block_size << '\n';
+        if (verbose)
+            std::cerr << path.filename().string() << ": block size "
+                      << human_size(block_size) << '\n';
 
         bool next_marker = false;
         while (!expected_total || total_written < *expected_total) {
@@ -348,30 +368,32 @@ static void convert(const std::vector<fs::path>& parts, const fs::path& output_p
             total_written += to_write;
             ++records;
             if (verbose && records % 10000 == 0) {
-                std::cerr << total_written;
-                if (expected_total) std::cerr << '/' << *expected_total;
-                std::cerr << " bytes\n";
+                std::cerr << "Processed " << human_size(total_written);
+                if (expected_total) std::cerr << " / " << human_size(*expected_total);
+                std::cerr << '\n';
             }
         }
         if (expected_total && total_written >= *expected_total) break;
+        if (!expected_total && !next_marker) break;
         if (part_index + 1 == parts.size()) {
             if (expected_total)
                 throw ImzError("image ended at " + std::to_string(total_written) + " of " +
                                std::to_string(*expected_total) + " bytes; next part missing");
             if (next_marker) throw ImzError("next-part marker found but next part is missing");
         }
-        if (!next_marker && verbose)
-            std::cerr << "continuing after physical EOF with " << parts[part_index + 1] << '\n';
+        if (verbose)
+            std::cerr << "Continuing with "
+                      << parts[part_index + 1].filename().string() << '\n';
     }
     if (expected_total && total_written != *expected_total)
         throw ImzError("output size does not match image header");
-    std::cout << "Converted " << records << " records, " << total_written
-              << " bytes -> " << output_path << '\n';
+    std::cout << "Converted " << records << " records, " << human_size(total_written)
+              << " -> " << output_path.filename().string() << '\n';
 }
 
 static void usage(const char* program) {
     std::cerr << "Usage: " << program
-              << " [--no-crc] [-v|--verbose] FIRST_PART.imz OUTPUT.img\n";
+              << " [--no-crc] [-v|--verbose] FIRST_PART.imz [OUTPUT.img]\n";
 }
 
 int main(int argc, char** argv) {
@@ -386,11 +408,13 @@ int main(int argc, char** argv) {
             std::cerr << "Unknown option: " << argument << '\n'; usage(argv[0]); return 2;
         } else positional.push_back(argument);
     }
-    if (positional.size() != 2) { usage(argv[0]); return 2; }
+    if (positional.size() < 1 || positional.size() > 2) { usage(argv[0]); return 2; }
     try {
         const fs::path input = positional[0];
         if (!fs::is_regular_file(input)) throw ImzError("input not found: " + input.string());
-        convert(multipart_paths(input), positional[1], verify_crc, verbose);
+        fs::path output = positional.size() == 2 ? fs::path(positional[1]) : input;
+        if (positional.size() == 1) output.replace_extension(".img");
+        convert(multipart_paths(input), output, verify_crc, verbose);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "imz2img: error: " << error.what() << '\n';

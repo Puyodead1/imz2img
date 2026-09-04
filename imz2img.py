@@ -45,6 +45,19 @@ def is_rle(record_type: int) -> bool:
     return (record_type & 0xFF00) in (0xFC00, 0xFF00)
 
 
+def human_size(size: int) -> str:
+    value = float(size)
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    unit = 0
+    while value >= 1024 and unit + 1 < len(units):
+        value /= 1024
+        unit += 1
+    if unit == 0:
+        return f"{size} B"
+    precision = 2 if value < 10 else 1
+    return f"{value:.{precision}f} {units[unit]}"
+
+
 def lzw_decode(data: bytes, max_bits: int, expected_size: int) -> bytes:
     """Decode DFSee's MSB-first Unix-compress-style LZW stream."""
     if not 9 <= max_bits <= 15:
@@ -150,7 +163,8 @@ def multipart_paths(first: Path) -> list[Path]:
         selected = [(number, path) for number, path in candidates if number >= start]
         for expected, (number, _path) in enumerate(selected, start):
             if number != expected:
-                raise ImzError(f"missing multipart file number {expected}")
+                selected = selected[: expected - start]
+                break
         return [path for _number, path in selected]
 
     paths = [first]
@@ -216,13 +230,15 @@ def convert(inputs: list[Path], output: Path, verify_crc: bool, verbose: bool) -
             with path.open("rb") as src:
                 header, this_block_size = open_stream(src, path)
                 if expected_total is None and header is not None:
-                    expected_total = int(header["total_sectors"]) * int(header["sector_size"])
+                    logical_sectors = int(header["total_sectors"]) or int(header["sectors"])
+                    if logical_sectors:
+                        expected_total = logical_sectors * int(header["sector_size"])
                 if block_size is None:
                     block_size = this_block_size
                 elif this_block_size != block_size:
                     raise ImzError("block size changed between parts")
                 if verbose:
-                    print(f"{path}: block size {block_size}", file=sys.stderr)
+                    print(f"{path.name}: block size {human_size(block_size)}", file=sys.stderr)
 
                 continue_part = False
                 while expected_total is None or total_written < expected_total:
@@ -284,10 +300,15 @@ def convert(inputs: list[Path], output: Path, verify_crc: bool, verbose: bool) -
                     total_written += len(chunk)
                     records += 1
                     if verbose and records % 10000 == 0:
-                        suffix = f"/{expected_total}" if expected_total is not None else ""
-                        print(f"{total_written}{suffix} bytes", file=sys.stderr)
+                        suffix = (
+                            f" / {human_size(expected_total)}"
+                            if expected_total is not None else ""
+                        )
+                        print(f"Processed {human_size(total_written)}{suffix}", file=sys.stderr)
 
             if expected_total is not None and total_written >= expected_total:
+                break
+            if expected_total is None and not continue_part:
                 break
             part_index += 1
             if part_index >= len(inputs):
@@ -297,19 +318,24 @@ def convert(inputs: list[Path], output: Path, verify_crc: bool, verbose: bool) -
                     )
                 if continue_part:
                     raise ImzError("next-part marker found but next part is missing")
-            if not continue_part and verbose:
-                print(f"continuing after physical EOF with {inputs[part_index]}", file=sys.stderr)
+            if verbose:
+                print(f"Continuing with {inputs[part_index].name}", file=sys.stderr)
 
     if expected_total is not None and total_written != expected_total:
         raise ImzError(f"wrote {total_written}, expected {expected_total} bytes")
-    print(f"Converted {records} records, {total_written} bytes -> {output}")
+    print(f"Converted {records} records, {human_size(total_written)} -> {output.name}")
     print(f"SHA256: {digest.hexdigest()}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convert DFSee IMZ images to raw IMG")
     parser.add_argument("input", type=Path, help="first IMZ part (e.g. part0.imz)")
-    parser.add_argument("output", type=Path, help="raw output image")
+    parser.add_argument(
+        "output",
+        type=Path,
+        nargs="?",
+        help="raw output image (default: input filename with .img extension)",
+    )
     parser.add_argument("--no-crc", action="store_true", help="skip CRC32 validation")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -317,7 +343,8 @@ def main() -> int:
         if not args.input.is_file():
             raise ImzError(f"input not found: {args.input}")
         parts = multipart_paths(args.input)
-        convert(parts, args.output, not args.no_crc, args.verbose)
+        output = args.output if args.output is not None else args.input.with_suffix(".img")
+        convert(parts, output, not args.no_crc, args.verbose)
         return 0
     except (ImzError, OSError) as error:
         print(f"imz2img: error: {error}", file=sys.stderr)

@@ -263,6 +263,9 @@ def convert(inputs: list[Path], output: Path, verify_crc: bool, verbose: bool) -
                             f"type 0x{record_type:04x}"
                         )
 
+                    decoded_size = block_size
+                    if expected_total is not None:
+                        decoded_size = min(block_size, expected_total - total_written)
                     if record_type in SMART_ZERO:
                         chunk = bytes(payload_size)
                     elif is_rle(record_type):
@@ -273,7 +276,7 @@ def convert(inputs: list[Path], output: Path, verify_crc: bool, verbose: bool) -
                             chunk = payload
                         elif record_type in LZW_TYPES:
                             try:
-                                chunk = lzw_decode(payload, record_type & 0x0F, block_size)
+                                chunk = lzw_decode(payload, record_type & 0x0F, decoded_size)
                             except ImzError as error:
                                 raise ImzError(
                                     f"{error} (record {records + 1}, output "

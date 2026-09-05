@@ -330,6 +330,10 @@ static void convert(const std::vector<fs::path>& parts, const fs::path& output_p
             }
 
             std::vector<uint8_t> chunk;
+            size_t decoded_size = block_size;
+            if (expected_total)
+                decoded_size = static_cast<size_t>(std::min<uint64_t>(
+                    block_size, *expected_total - total_written));
             if (type == 0xEEEE || type == 0xEEFC) {
                 chunk.assign(payload_size, 0);
             } else if (is_rle(type)) {
@@ -340,7 +344,7 @@ static void convert(const std::vector<fs::path>& parts, const fs::path& output_p
                 if (type == 0 || type == 0x10 || type == block_size)
                     chunk = std::move(payload);
                 else if (type == 0x0C || type == 0x1C)
-                    chunk = lzw_decode(payload, type & 0x0F, block_size);
+                    chunk = lzw_decode(payload, type & 0x0F, decoded_size);
                 else {
                     std::ostringstream message;
                     message << "unknown record type 0x" << std::hex << type;

@@ -221,6 +221,25 @@ static std::optional<Header> read_header(std::istream& in, const fs::path& path)
 
 static std::vector<fs::path> multipart_paths(const fs::path& first) {
     const std::string name = first.filename().string();
+
+    // A numbered basename can still use DFSee's classic extension sequence,
+    // for example part1.imz, part1.002.  Prefer that unambiguous same-stem
+    // continuation over treating part2.imz as the next file.
+    fs::path classic_second = first;
+    classic_second.replace_extension(".002");
+    if (first.extension() == ".imz" && fs::exists(classic_second)) {
+        std::vector<fs::path> result{first};
+        for (unsigned number = 2;; ++number) {
+            std::ostringstream extension;
+            extension << '.' << std::setw(3) << std::setfill('0') << number;
+            fs::path candidate = first;
+            candidate.replace_extension(extension.str());
+            if (!fs::exists(candidate)) break;
+            result.push_back(candidate);
+        }
+        return result;
+    }
+
     struct NumberedName { std::string prefix, suffix; unsigned number; };
     const auto parse_numbered = [](const std::string& value) -> std::optional<NumberedName> {
         const size_t dot = value.rfind('.');

@@ -39,8 +39,10 @@ python imz2img.py part0.imz output.img
 
 Multipart `part0.imz`, `part1.imz`, ... sets are discovered automatically when
 the first part is supplied. Classic DFSee `.imz`, `.002`, `.003`, ... sets are
-also supported. CRC32 fields are checked by default; use `--no-crc` only for
-recovery from a damaged image.
+also supported. When both naming patterns are present, a same-stem `.002` file
+takes precedence (for example, `part1.imz`, `part1.002`) so an unrelated
+`part2.imz` is not consumed. CRC32 fields are checked by default; use `--no-crc`
+only for recovery from a damaged image.
 
 Similarly named files are consumed only when the image itself requires a
 continuation. Modern headers provide the total image size; legacy streams use

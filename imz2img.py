@@ -147,6 +147,20 @@ def lzw_decode(data: bytes, max_bits: int, expected_size: int) -> bytes:
 
 def multipart_paths(first: Path) -> list[Path]:
     """Find part0/part1 sets and classic .imz/.002/.003 DFSee sets."""
+    # A numbered basename can still use DFSee's classic extension sequence,
+    # for example part1.imz, part1.002. Prefer that unambiguous same-stem
+    # continuation over treating part2.imz as the next file.
+    if first.suffix == ".imz" and first.with_suffix(".002").exists():
+        paths = [first]
+        number = 2
+        while True:
+            candidate = first.with_suffix(f".{number:03d}")
+            if not candidate.exists():
+                break
+            paths.append(candidate)
+            number += 1
+        return paths
+
     name = first.name
     match = re.match(r"^(.*?)(\d+)(\.[^.]+)$", name)
     if match:
